@@ -31,6 +31,8 @@ potato <- veggies_ts |>
   fill_gaps(.full = TRUE) |>
   fill(Average)
 
+potato |> autoplot()
+
 # time plot
 potato |>
   autoplot(Average) +
@@ -40,7 +42,27 @@ potato |>
 
 # ggseason plot
 potato |>
-  gg_season(Average) +
+  gg_season(Average, labels = "right") +
   labs(y="Nepalese Rupee",
        title="Average Price of Potato Red in Nepal") +
   theme_bw()
+
+potato_month <- potato |>
+  as_tibble() |>
+  mutate(Date = yearmonth(Date)) |>
+  group_by(Date, Commodity) |>
+  summarize(Average = mean(Average)) |>
+  as_tsibble(key = Commodity,
+             index = Date)
+
+potato_month |>
+  gg_subseries()
+
+potato_month |> autoplot()
+
+potato |>
+  ACF(Average, lag_max = 365) |> autoplot()
+
+
+potato_month |>
+  ACF(Average, lag_max = 30) |> autoplot()
