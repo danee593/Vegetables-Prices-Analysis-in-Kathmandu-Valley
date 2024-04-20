@@ -1,0 +1,221 @@
+---
+title: "Vegetables Prices Analysis"
+author: "Daniel Enriquez"
+date: "2024-04-20"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(fpp3)
+library(gridExtra)
+library(readxl)
+```
+
+## Vegetables Prices Analysis in Kathmandu Valley
+
+## 1. Introduction
+
+bla bla bla
+
+## 1.1 Data Preparation
+
+Loading the data sets: fruits and vegetables prices in Nepal, as well as the Consumer Price Index (CPI) for Nepal. The fruits and vegetables table contains the average price for vegetables and fruits on a given day. For the time series analysis this will be aggregated to the month level by taking the average of the average daily prices in a particular month.
+
+The generated tsibble looks like this.
+
+```{r}
+# Loading Datasets.
+veggies <- read_csv("data_sources/kalimati_tarkari_dataset.csv", 
+                    col_types = cols(Date = col_date(format = "%Y-%m-%d")))
+
+suppressWarnings({
+  cpi <- read_excel("data_sources/Nepal CPI Trading Economics.xlsx", 
+                    col_types = c("date", "numeric"))
+})
+
+cpi <- cpi |>
+  filter(Date >= '2013-08-01 00:00:00')
+
+# tidy up cpi
+base_index <- cpi$CPI[1]
+cpi <- cpi |>
+  mutate(Date = yearmonth(cpi$Date),
+         CPI = CPI/base_index) |>
+  select(c(Date, CPI))
+
+suppressMessages({
+  veggies <- veggies %>%
+    filter(Unit == "Kg") %>%
+    filter(Commodity %in% c("Tomato Big(Nepali)", "Potato Red",
+                            "Onion Dry (Indian)", "Carrot(Local)",
+                            "Cabbage(Local)")) %>%
+    mutate(Date = yearmonth(Date)) %>%
+    select(Commodity, Date, Average) %>%
+    group_by(Date, Commodity) %>%
+    summarize(Average = mean(Average)) %>%
+    ungroup()
+})
+
+veggies_ts <- veggies |>
+  as_tsibble(key = Commodity,
+             index = Date)
+
+head(veggies_ts, 5)
+```
+
+## 2. Time Series Graphics
+
+This plot shows the average monthly price in Nepalese Rupees of 5 vegetables in Nepal.
+
+```{r}
+veggies_ts |>
+  autoplot(Average) +
+  labs(y="Nepalese Rupees",
+       title="Average price per month of various vegetables in Nepal") +
+  theme_bw()
+```
+
+The following plot shows the average monthly price of Potato Red in Nepal. The graph shows some spikes around mid year accross all of the years of the observed data, and also shows a high increment in price in 2020.
+
+```{r}
+potato <- veggies_ts |>
+  filter(Commodity == "Potato Red")
+
+potato |>
+  autoplot(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Potato Red in Nepal") +
+  theme_bw()
+```
+
+Moreover, the drastic increase in price in 2020 can be seen in the following plot. 2020 is the year with the highes price of Potato Red in the second semester of the year. In this plot we can also observe how, on average, the second semester of the year sees an increase in price of the potato.
+
+```{r}
+potato |>
+  gg_season(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Potato Red in Nepal") +
+  theme_bw()
+```
+
+This plot shows the average price of Potato Red in Nepal per month, as we can observe, the month with the highest price, on average, is October. This higher price coincide with the peak season in Nepal October-November. In this months Nepal experience a surge in tourism due to trekking activities but also coincides with the biggest festival in the Country, Dashin, which lasts for 15 days in September and October. The big spike in prices in 2020 can be attributed to a slump in production as mentioned by <https://myrepublica.nagariknetwork.com/news/escalating-prices-of-potato-onion-and-tomato-make-kitchen-expenses-dearer/>.
+
+```{r}
+potato |>
+  gg_subseries(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Potato Red in Nepal") +
+  theme(axis.text.x = element_blank(),  # Hide x-axis text
+        axis.ticks.x = element_blank())
+```
+
+The price seems to have some seasonal component but also some sort of dependence on the previous months' prices. The following plot shows the autocorrelation plot of the Potatoes price in Nepal. As seen by the graph the price is highly correlated with the previous month prices and the correlation continues for 3 periods, then decreases.
+
+```{r}
+potato |>
+  ACF(Average, lag_max = 15) |> 
+  autoplot() +
+  labs(title="Autocorrelation plot") +
+  theme_bw()
+```
+
+It's important to note that economic series tend to increase overtime, specially prices. Therefore, an adjustment is necessary to compare the prices across time. In this analysis the CPI of Nepal will be used as a deflator, the data was obtained from INSERT REFERENCE and the base for comparison is August 2013.
+
+```{r}
+potato_constant_prices <- potato |>
+  inner_join(cpi, by = join_by(Date)) |>
+  mutate(Average_constant_prices = Average / CPI) |>
+  select(Date, Commodity, Average_constant_prices)
+head(potato_constant_prices, 5)
+```
+
+Visually a representation of the difference between the average price per month and the average price per month with constant prices. As seen by the plot the cpi deflator reduces the distance of the spikes with the lowest points in the graphics, reducing the variability.
+
+```{r}
+p1 <- potato_constant_prices |>
+  autoplot(Average_constant_prices) +
+  labs(y="Nepalese Rupees",
+       title="Potato 2013 prices") +
+  theme_bw()
+
+p2 <- potato |>
+  autoplot(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Potato") +
+  theme_bw()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+In the following can be found the difference between the different transformations. The first plot is just the average price divided by the deflator, the second plot is on top of that transformation a box cox transformation and the last plot is on top of division by deflator a log transformation. The Box Cox transformation on top of the constant prices seems to be the best transformation as it somewhat reduces the spikes.
+
+```{r}
+
+lambda_guerrero_constant_prices <- potato_constant_prices |>
+  features(Average_constant_prices, features = guerrero) |>
+  pull(lambda_guerrero)
+
+# Inflation only
+p1 <- potato_constant_prices |>
+  autoplot(Average_constant_prices) +
+  labs(y="Constant Prices",
+       title="Average Price of Potato Red, 2013 prices in Nepal") +
+  theme_bw()
+
+# Box Cox
+p2 <- potato_constant_prices |>
+  autoplot(box_cox(Average_constant_prices, lambda_guerrero_constant_prices)) +
+  labs(y="Box Cox",
+       title="Box Cox Transformation of Potato Red, 2013 prices in Nepal") +
+  theme_bw()
+  
+p3 <- potato_constant_prices |>
+  autoplot(log(Average_constant_prices)) +
+  labs(y="Log",
+       title="Average Log Price of Potato Red, 2013 prices in Nepal") +
+  theme_bw()
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+The following plot shows in gray the box cox transformation of the average price of Potatoes in Nepal and the STL decomposition of that series, there is no clear trend line upwards or downwards, it looks more as a cyclical pattern, at around midyear of the even years it reaches it's highest point in the cycle and around midyear of the odd years it reaches the lowest point. 
+
+
+```{r}
+stl_dcmp <- potato_constant_prices |>
+  model(stl = STL(box_cox(Average_constant_prices, lambda_guerrero_constant_prices)))
+
+potato_constant_prices %>%
+  autoplot(box_cox(Average_constant_prices, lambda_guerrero_constant_prices), color='gray') +
+  autolayer(components(stl_dcmp), trend, color='red') +
+  ylab("Box Cox Transformation of Average Price") +
+  ggtitle("Box-Cox Transformation Average Price of Potato Red in Nepal") +
+  theme_bw()
+```
+
+
+The STL decomposition uses the default window for seasonal pattern of 13 months, making the seasonal pattern the same accross the entire time series, as seen in the season_year plot, every year follows the same pattern around september and october the price increases and at the begining of the year is at the lowest point. 
+
+```{r}
+components(stl_dcmp) %>% autoplot()
+```
+
+The following image shows the X-13 Arima decomposition, the main difference is the trend component and the residuals, the Arima model appears to capture more variability in the trend component and the residuals appears to be only withe noise. 
+
+```{r}
+seats_dcmp <- potato_constant_prices |>
+  model(X_13ARIMA_SEATS(box_cox(Average_constant_prices, lambda_guerrero_constant_prices)))
+
+components(seats_dcmp) |>
+  autoplot()
+```
+
+```{r}
+
+```
+
