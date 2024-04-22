@@ -8,7 +8,9 @@ output:
 ---
 
 ```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = '/Users/danielenriquez/iseg/forecasting_from_hell/')
 knitr::opts_chunk$set(echo = TRUE)
+options(warn = -1, messages = FALSE)
 library(readr)
 library(tidyverse)
 library(fpp3)
@@ -27,6 +29,7 @@ bla bla bla
 Loading the data sets: fruits and vegetables prices in Nepal, as well as the Consumer Price Index (CPI) for Nepal. The fruits and vegetables table contains the average price for vegetables and fruits on a given day. For the time series analysis this will be aggregated to the month level by taking the average of the average daily prices in a particular month.
 
 The generated tsibble looks like this.
+
 
 ```{r}
 # Loading Datasets.
@@ -124,6 +127,8 @@ potato |>
   theme_bw()
 ```
 
+## 3. Time series decomposition
+
 It's important to note that economic series tend to increase overtime, specially prices. Therefore, an adjustment is necessary to compare the prices across time. In this analysis the CPI of Nepal will be used as a deflator, the data was obtained from INSERT REFERENCE and the base for comparison is August 2013.
 
 ```{r}
@@ -214,6 +219,114 @@ seats_dcmp <- potato_constant_prices |>
 components(seats_dcmp) |>
   autoplot()
 ```
+
+## 4. The forecaster’s toolbox
+
+For forecasting we will create 4 simple models, the seasonal naive, naive, drift and mean. For the mean model, the future values are the mean of the historical data. In the naive model, the forecast is equal to the last value of the time series. Drift is a random walk, last value plus the average change. Finally, the Seasonal Naive, the forecast equals the last value from the same season.
+We create a mable with the 4 basic models.
+
+```{r}
+four_basic_models <- potato_constant_prices|>
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices))
+    
+four_basic_models
+
+```
+
+
+In the following plot we can see the performance of the models in a 12 month forecast period. It's evident from the plot that none of the models perform particularity good. There is a clear seasonality in the data, at the second semester of the year the prices increase, the seasonal naive is able to capture that. However, there is no guarantee that the unfortunate slump in production of 2020 will repeat for 2021 towards 2022.
+It's also interesting to note that the drift method that consideres the trend is almost the same as the naive, the trend is negative and close to 0.
+
+```{r}
+four_basic_models |>
+  forecast(h = "12 months") |>
+  autoplot(potato_constant_prices, level = NULL) +
+  ggtitle("12 Months forecast for Average Potato Price, 2013 prices.") +
+  ylab("Nepalese Rupees") +
+  guides(colour = guide_legend(title = "Forecast")) +
+  theme_bw()
+```
+
+
+The following four plots show the model forecasting vs the actual data. It's evident that the worst model, the one with the largest residuals, is the mean. It does not follow any pattern in the data it just takes the sample mean. The naive and drift models follows the noise of the data closely but with a lag of one period. While the seasonal naive is able to somewhat capture the seasonality of the data but has large errors in 2015, 2018 and 2020 due to changes in the seasonality from one year to the other.
+
+```{r}
+models <- c("Seasonal_naive", "Naive", "Drift", "Mean")
+
+plots <- map(models, ~ four_basic_models |>
+                     select(Commodity, all_of(.x)) |>
+                     augment() |>
+                     ggplot(aes(x = Date)) +
+                     geom_line(aes(y = Average_constant_prices, colour = "Data")) +
+                     geom_line(aes(y = .fitted, colour = "Fitted")) +
+                     ggtitle(sprintf("Data and %s model fitted", .x)) +
+                     ylab("Nepalese Rupees"))
+                    
+
+# Suppress warning messages while printing each plot
+walk(plots, ~suppressWarnings(print(.)))
+```
+
+The following four plots shows the residuals of the four basic models. As seen by the plots not a single model reduces the error to white noise. All of the models still exhibit autocorrelation in the errors as seen by the ACF plots, the errors appear to be non-normally distributed, except the seasonal naive model. The conclusion is that these models are not appropriate to model or forecast the time series.
+
+```{r}
+# This chunk could be replaced with a loop if R had actual proper loops instead of weird ones that doesn't weird behavior.
+
+four_basic_models |>
+  select(Commodity, Seasonal_naive) |>
+  gg_tsresiduals() +
+  ggtitle("residuals of Seasonal_naive")
+
+four_basic_models %>%
+  select(Commodity, Naive) %>%
+  gg_tsresiduals()+
+  ggtitle("residuals of Naive")
+
+four_basic_models %>%
+  select(Commodity, Drift) %>%
+  gg_tsresiduals()+
+  ggtitle("residuals of Drift")
+
+four_basic_models %>%
+  select(Commodity, Mean) %>%
+  gg_tsresiduals()+
+  ggtitle("residuals of Mean")
+
+```
+
+
+For testing the accuracy of the 4 simple models and compare them, a recursive window method is used, the recursive window will be 18 months, increasing by 1 month. The first table shows the accuracy of the model when forecasting a 12 period window, 12 months and the second table when forecasting only 1 month. The results shows the same conclusion that we reached above by looking at the fitted model vs the data. The drift and naive models are quite similar in results and they are good at forecasting small windows since this two models follows the noise of the data. However, when forecasting longer periods such as 12 months they do not perform as good. On the other hand, the seasonal naive model performs worse than the naive and drift for forecasting small periods of time but perform much better when forecasting longer periods such as 12 months. However, from the residuals we concluded that neither of these methods produces residuals that resembles white noise.
+
+```{r}
+fit_cv <- potato_constant_prices |>
+  stretch_tsibble(.init = 18, .step = 1) |>
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices))
+
+fc_cv <- fit_cv %>%
+  forecast(h=12)
+
+suppressMessages({fc_cv %>%
+  accuracy(potato_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)})
+
+fc_cv <- fit_cv %>%
+  forecast(h=1)
+
+suppressMessages({fc_cv %>%
+  accuracy(potato_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)})
+```
+
+
+## 5. Exponential smoothing
 
 ```{r}
 
