@@ -1,6 +1,8 @@
 ---
 title: "Vegetables Prices Analysis"
-author: "Daniel Enriquez"
+author: "Daniel Enriquez, Student Code: 60369,
+         Emma Casalini, Student Code: 60382,
+         Chenjie Chen, Student Code: 53505"
 date: "2024-04-20"
 output: 
   html_document:
@@ -16,6 +18,7 @@ library(tidyverse)
 library(fpp3)
 library(gridExtra)
 library(readxl)
+library(prophet) # will be used in the last section of this markdown.
 ```
 
 ## Vegetables Prices Analysis in Kathmandu Valley
@@ -199,7 +202,7 @@ potato_constant_prices %>%
   autoplot(box_cox(Average_constant_prices, lambda_guerrero_constant_prices), color='gray') +
   autolayer(components(stl_dcmp), trend, color='red') +
   ylab("Box Cox Transformation of Average Price") +
-  ggtitle("Box-Cox Transformation Average Price of Potato Red in Nepal") +
+  ggtitle("STL Decomposition of Average Price of Potato Red in Nepal") +
   theme_bw()
 ```
 
@@ -328,7 +331,221 @@ suppressMessages({fc_cv %>%
 
 ## 5. Exponential smoothing
 
-```{r}
+From the previous plots and models it's clear that the data exhibits high seasonality but does not have a clear trend, upwards or down sustained in time, only seasonal variability. Therefore, the best model would be one that includes seasonality and possibly no trend. From what we've observed from plots the prices are heavily dependent on the season and the previous prices, therefore it's expected that alpha will be close to 1 to weight more the most recent observations.
 
+
+```{r}
+fit_my_ets <- potato_constant_prices |>
+  model(my_ets = ETS(Average_constant_prices ~ error("A") + trend("N") + season("A")))
+```
+As expected the alpha is close to 1 meaning that the most recent observations are weighted heavily.
+
+```{r}
+fit_my_ets |> 
+  tidy()
 ```
 
+The model appears to leave white noise residuals, and exhibits a clear and constant seasonality, prices increasing towards the end of the year.
+```{r}
+fit_my_ets |>
+  components() |>
+  autoplot()
+```
+
+The model appears to adjust better than the other models but still exhibits some autocorrelation in the errors, but they appear to be normally distributed with mean 0.
+
+```{r}
+fit_my_ets |>
+  gg_tsresiduals()
+```
+
+```{r}
+fit_ets <- potato_constant_prices |>
+  model(ets = ETS())
+```
+
+The automatic model estimated with fpp3 seems to be almost the same model as we tought, without a trend, but with some adjustments in the parameteres.
+
+```{r}
+fit_ets |> 
+  tidy()
+```
+
+The seasonality appears to be the same as our model being constant all over the observed periods, increasing the prices towards the end of the year and the residuals appears to be white noise.
+```{r}
+fit_ets |>
+  components() |>
+  autoplot()
+```
+
+
+
+
+This model fits better the data, the residuals besides 1 does not exhibit autocorrelation and the errors appears to be normaly distributed with 0 mean.
+```{r}
+fit_ets |>
+  gg_tsresiduals()
+```
+
+ 
+
+The p-value of the Ljung-Box test of the potato series is 0.29, therefore we fail to reject the null hypothesis, suggesting that there is no significant evidence of autocorrelation in the residuals.
+```{r}
+augment(fit_ets) %>%
+  features(.resid, ljung_box, lag=24, dof=0)
+```
+
+The tables show the performance of the exponential smoothing model compared to the 4 most basic models, the first table is forecasting a 12 month period and the second table forecasting only 1 month. As seen by the tables the ETS model performs much better in both forecasting than the simple methods, in almost every single metric it outperforms the simpler methods, but also the residuals of the ETS model appears to be white noise. 
+
+```{r}
+fit_cv <- potato_constant_prices |>
+  stretch_tsibble(.init = 18, .step = 1) |>
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices),
+    ETS = ETS())
+
+fc_cv <- fit_cv %>%
+  forecast(h=12)
+
+suppressMessages({fc_cv %>%
+  accuracy(potato_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)})
+
+fc_cv <- fit_cv %>%
+  forecast(h=1)
+
+suppressMessages({fc_cv %>%
+  accuracy(potato_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)})
+```
+
+## 6. ARIMA
+
+
+The best auto ARIMA model is ARIMA(2,0,0)(1,1,0). Let's break down what this implies:
+1. Auto regressive (AR) terms (p): 2 auto regressive terms, this is expected since the exponential smoothing model revealed that the prices are highly dependent on the previous values (weighted more).
+2. Difference (d): 0, this implies that the series appears to be stationary and that no differencing is needed to make the series stationary, this is unusual of economic series, where most of them are Integrated of order 1.
+3. Moving Average (MA) terms (q): is zero, meaning that there is no need to include past errors to forecast the series.
+4. Seasonal Autoregressive (SAR) terms (P): the P is 1, meaning that the current observation is modeled as a linear combination of the previous observation from the same season, we concluded by plotting the series that there is a high seasonal component, specially towards the end of the year where the prices tend to increase.
+5. Seasonal Differencing (D): this is almost equivalent to the number 2 to difference the series, in this case the season is differenced to make it stationary because of the strong seasonal component of the series.
+6. Seasonal Moving Average (SMA) terms (Q):also equivalent to the corresponding moving average term, in this series is zero. meaning that there is no need to include past errors to forecast the series.
+7. Seasonal Period ([s]): this is the final component which is 12, meaning that the granularity of the data is monthly and the seasonal component is repeated every year.
+
+```{r}
+fit_arima <- potato_constant_prices |>
+  model(ets = ARIMA()) |>
+  report()
+```
+
+
+The residuals of the auto arima appears to be white noise, it does not exhibit autocorrelation on the errors and they appear to be normally distributed around a zero mean.
+
+```{r}
+fit_arima |>
+  gg_tsresiduals()
+```
+
+
+The following table compares the ARIMA model with the previous models: exponential smoothing, seasonal naive, naive, drift and mean. The 4 most simple models does not provide the best estimate and moreover the residuals are not white noise. Between ARIMA and ETS the decision becomes narrower, both perform good and the residuals resemble white noise. However, the ETS models seems to perform better on both 1 month forecast and 12 months forecast in almost every metric. Therefore, we conclude that the best model to forecast the Potato Prices is the ETS.
+
+```{r}
+fit_cv <- potato_constant_prices |>
+  stretch_tsibble(.init = 18, .step = 1) |>
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices),
+    ETS = ETS(),
+    Arima = ARIMA())
+
+fc_cv <- fit_cv %>%
+  forecast(h=12)
+
+suppressMessages({fc_cv %>%
+  accuracy(potato_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)})
+
+fc_cv <- fit_cv %>%
+  forecast(h=1)
+
+suppressMessages({fc_cv %>%
+  accuracy(potato_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)})
+```
+
+## 7. Other forecasting methods
+
+For other forecasting methods this time series will be forecasted with Prophet, developed by Taylor and Letham (2017) at Meta Platforms, Inc. Formerly named Facebook, Inc. The code is implemented following the Quickstart R API retrived from https://facebook.github.io/prophet/docs/quick_start.html#r-api.
+
+Prophet requires two columns, "ds" to be a date column and "y" to be a numeric column to forecast.
+
+```{r}
+df <- potato_constant_prices |> as_tibble() |>
+  mutate(ds = Date,
+         y = Average_constant_prices) |>
+  select(ds, y)
+```
+
+The prophet function allows to calculate a forecast of the series.
+
+```{r}
+m <- prophet(df, seasonality.mode = 'multiplicative')
+```
+
+The following table shows the last values of the forecast made with prophet, as seen even if the data is monthly prophet will make a daily forecast.
+
+```{r}
+future <- make_future_dataframe(m, periods = 365)
+forecast <- predict(m, future)
+tail(forecast[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+```
+The following plot shows the actual vs fitted values and a forecast of 1 year. The model adjusts good to the actual values. However, the forecast doesn't look good, it does not follow well the seasonal pattern of the data, with higher prices at the end of the year, it just follows a noise and does not seem plausible.
+
+```{r}
+plot(m, forecast)
+```
+
+The components of the forecast can be seen in the following plot, the trend seems to decrease from 2014 to 2017 and then increase sharply, meanwhile the seasonality appears to be extremely ciclycal, and almost constant across the years, which was not seen in the previus plots and does not seem plausible.
+
+```{r}
+prophet_plot_components(m, forecast)
+```
+
+Finally, the RMSE is calculated using the same rolling window used for the fable models and 1 month forecast. since prophet does not provide an easier way to calculate this compared to fpp3 the code is a little verbose. The RMSE is 7.16 which is higher than ETS and ARIMA for 1 month forecast, as seen this method is worse than ETS, ARIMA, Drift and Naive as measured by RMSE, this was expected by looking at the plots, the model fails to capture seasonality and does not provide a good forecast compared to ETS and ARIMA.
+
+```{r}
+
+init_obs <- 18
+
+# Define the number of folds
+n_folds <- nrow(df) - init_obs + 1
+
+prophet_rolling_cv <- function(df, init_obs, n_folds) {
+  cv_results <- numeric(n_folds)
+  
+  for (i in 1:n_folds) {
+    train <- df[1:(init_obs + i - 1), ]
+    test <- df[(init_obs + i):(init_obs + i), ]
+    
+    # Fit Prophet model on training data
+    suppressMessages({ m <- prophet(train) })
+    
+    suppressMessages({ future <- make_future_dataframe(m, periods = nrow(test), freq = "month") })
+    forecast <- predict(m, future)
+    
+    # Calculate RMSE
+    suppressMessages({ cv_results[i] <- sqrt(mean((forecast$yhat[-(1:nrow(train))] - test$y)^2)) })
+  }
+  
+  suppressMessages({ return(mean(cv_results, na.rm = TRUE)) })
+}
+
+suppressMessages({ cv_rmse <- prophet_rolling_cv(df, init_obs, n_folds) })
+
+print(paste0("Prophet RMSE:",cv_rmse))
+
+```
