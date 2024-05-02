@@ -183,3 +183,24 @@ report(CabbageETS)
 
 
 
+# potatoes add NAs to gaps and fill them with previous value.
+potato <- veggies_ts |>
+  filter(Commodity == "Potato Red") |>
+  fill_gaps(.full = TRUE) |>
+  fill(Average)
+
+# time plot
+potato |>
+  autoplot(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Potato Red in Nepal") +
+  theme_bw()
+
+# ggseason plot
+potato |>
+  gg_season(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Potato Red in Nepal") +
+  theme_bw()
+
+
