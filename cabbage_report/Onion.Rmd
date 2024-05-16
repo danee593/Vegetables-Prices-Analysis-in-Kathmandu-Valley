@@ -1,0 +1,222 @@
+---
+title: "Onion"
+author: "Emma"
+date: "2024-05-05"
+output: html_document
+---
+
+```{r}
+# Loading Datasets.
+veggies <- read_csv("../data_sources/kalimati_tarkari_dataset.csv", 
+                    col_types = cols(Date = col_date(format = "%Y-%m-%d")))
+
+suppressWarnings({
+  cpi <- read_excel("../data_sources/Nepal CPI Trading Economics.xlsx", 
+                    col_types = c("date", "numeric"))
+})
+
+cpi <- cpi |>
+  filter(Date >= '2013-08-01 00:00:00')
+
+# tidy up cpi
+base_index <- cpi$CPI[1]
+cpi <- cpi |>
+  mutate(Date = yearmonth(cpi$Date),
+         CPI = CPI/base_index) |>
+  select(c(Date, CPI))
+
+suppressMessages({
+  veggies <- veggies %>%
+    filter(Unit == "Kg") %>%
+    filter(Commodity %in% c("Tomato Big(Nepali)", "Potato Red",
+                            "Onion Dry (Indian)", "Carrot(Local)",
+                            "Cabbage(Local)")) %>%
+    mutate(Date = yearmonth(Date)) %>%
+    select(Commodity, Date, Average) %>%
+    group_by(Date, Commodity) %>%
+    summarize(Average = mean(Average)) %>%
+    ungroup()
+})
+
+veggies_ts <- veggies |>
+  as_tsibble(key = Commodity,
+             index = Date)
+
+head(veggies_ts, 5)
+
+```
+
+## 2. Time Series Graphics
+
+This plot shows the average monthly price in Nepalese Rupees of 5 vegetables in Nepal.
+
+```{r}
+veggies_ts |>
+  autoplot(Average) +
+  labs(y="Nepalese Rupees",
+       title="Average price per month of various vegetables in Nepal") +
+  theme_bw()
+```
+
+# Forecasting for the Onion
+Looking at the initial plot of the Onion there is a strong cyclic behavior, this is not uncommon in agriculture because most veggies is sensitive to weather conditions, the price usually depends on harvesting and so called crop-rotations where farmers swap the veggie they grow for soil fertility and so on. Agriculture is generally speaking pretty sensitive so a lot of outside factors. We can see a high increase/spike at the end of every second year and a dip/decrease at the beginning of every second year. Since this is with a 2 year interval it makes the cyclic behavior very apparent.Between this increase and decrease the price is relatively stable with a possible seasonality. When it comes to the trend it's not something that is very apparent for the naked eye, but ofc, the prices would naturally increase over time - just like everything else.
+
+```{r}
+Onion <- veggies_ts %>% 
+  filter(Commodity == "Onion Dry (Indian)")
+
+Onion %>% 
+  autoplot(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Onion") +
+  theme_bw()
+
+```
+# Subseries
+In the subseries plot below we can see that the most expensive month is December and that the price increases from August up until December and drops in January, then stabilizes over the summer.
+
+```{r}
+Onion %>% 
+  gg_subseries(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price Onion") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+# Autocorrelation function (ACF)
+Looking at the ACF we can first of all we can see that we have 6 significant lags. We can also see that the first two lags are the most significant. We also have two significant lags that are seasonal (lag 6 is very questionable because it is barely visible) but lag 24 is significant. lag 24 confirms our suspicions on the cyclic behaviour since it indicates that the patterns repeats every two years, just as we have seen in previous plots, so we have some sort of long-term pattern that once again, can be due to harvesting or similar agriculture activities.
+
+```{r}
+Onion %>% 
+  ACF(Average, lag_max = 24) %>%  
+  autoplot() +
+  labs(title="Autocorrelation - Onion") +
+  theme_bw()
+```
+# Tranformations
+Looking at previous plots it is not suggested that a mathematical transformation (log) would be needed because there is no multiplicative pattern or clear positive trend or any of that sort.One transformation that we do deem necessary is related to the price and the inflation. So the transformation performed was to adjust the onion prices for inflation (with the CPI), this is mainly to show the real purchasing power and make comparison over time more accurate.
+
+When it comes to the box-cox transformation, which is mainly for normalizing skewed data and remove heteroskedasticity, we double check by plotting the before and after (of the box-cox) to verify if it is needed or not. The box-cox transformation did account for some variance, hence we decided to apply it.
+
+```{r}
+Onion_constant_prices <- Onion |>
+  inner_join(cpi, by = join_by(Date)) |>
+  mutate(Average_constant_prices = Average / CPI) |>
+  select(Date, Commodity, Average_constant_prices)
+head(Onion_constant_prices, 5)
+
+
+Onion_constant_prices %>%
+  features(Average_constant_prices, features = guerrero) %>%
+  pull(lambda_guerrero)-> lambda
+
+Onion_constant_prices %>% autoplot(Average_constant_prices)
+
+Onion_constant_prices %>%
+  autoplot(box_cox(Average_constant_prices, lambda))
+```
+# Decomposition models
+We choose various decomposition models for the Onion to evaluate which one is the best. When it comes to the STL2 model we set window 72 in the trend to catch any trend in the span of our data, and season window to 24 to match our seasonal lag at 24 (cyclic behavior). In the plot below we can see that the best suited decomposition model is the X13 (Arima Seats) because it captures the trend and the seasonality/cyclic pattern the best out of all models. 
+
+but looking at the residuals (that does not resemble white noise) we cans see that this model was not acceptable, even if it was the best, this suggest that we should keep looking for a better model.
+
+```{r}
+Onion_constant_prices %>%
+  model(STL1 = STL(Average_constant_prices),
+        STL2 = STL(Average_constant_prices ~ trend(window = 72 ) + season(window = 24), robust = TRUE),
+        fixed = STL(Average_constant_prices ~ season(window = "periodic"), robust = TRUE),
+        x13 = X_13ARIMA_SEATS(Average_constant_prices),
+        seats = X_13ARIMA_SEATS(Average_constant_prices ~ seats()))%>%
+  components() -> dcmpOnion
+
+dcmpOnion %>% as_tsibble() %>% autoplot(trend)
+dcmpOnion %>% as_tsibble() %>% autoplot(season_adjust)
+autoplot(dcmpOnion)
+
+Onion_X13 <- Onion_constant_prices %>%
+  model(RW(Average_constant_prices ~ drift()))
+
+Onion_X13 %>% gg_tsresiduals()
+```
+## 4. The forecaster’s toolbox
+Looking at models that might suit the Onion data for forecasting we are evaluating the naive, seasonal naive, drift and mean model. 
+we have a total of 94 rows, so we can use 26 for training and leave the rest.The best model here (which has the lowest RMSE) is the drift model, but it not necessarily that much better than the Arima_x13. The residuals are still not representing white noise.
+
+```{r}
+num_rows <- nrow(Onion_constant_prices)
+print(num_rows)
+
+train_onion <- Onion_constant_prices %>% slice(1:(n() - 60))
+
+fit_onion <- train_onion %>%
+  model(
+    Naive = NAIVE(Average_constant_prices),
+    Seasonal_Naive = SNAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices)
+  )
+
+fit_onion %>% accuracy() %>% arrange(RMSE)
+```
+
+When specifically looking at best model for forecasting (for a 24 month period due to our cyclic behavior) to see how the different models compare, it is clear here that no model is too good and that even the best model is bad, as evidenced by its poor residual that does not resemble white noise.
+
+```{r}
+fit_onion %>% forecast(h = 24) %>% accuracy(Onion_constant_prices)%>% arrange(RMSE)
+
+onion_drift <- Onion_constant_prices %>% model(NAIVE(Average_constant_prices))
+onion_drift %>% gg_tsresiduals()
+
+```
+## 5. Exponential smoothing
+
+Looking at the Onion ACF we can see that it is stationary. Since we already have evaluated the data and we know that we have both seasonality and cyclic behavior we would suggest that we have a multiplicative error and seasonality, to capture all of these different changes in the onion price over time, also because the onion increase and decrease a lot over time and showcase variation. Since the trend is not very apparent we can use a N on the trend. the model would hence me a MNM-model.The best model for the onion out of the models below is the MNM-model, that is also the model that was chosen when performing ETS. So far this is the best model we have seen so far, even if we still have significant lags in the residuals (ACF).
+
+
+```{r}
+Onion_ExponentialSmoothing <- Onion_constant_prices %>% 
+  model(MNM = ETS(Average_constant_prices ~ error("M") + trend("N") + season("M")),
+        holt = ETS(Average_constant_prices ~ error("A") + trend("A") + season("N")),
+        ses = ETS(Average_constant_prices ~ error("A") + trend("N") + season("N")),
+        ETS = ETS(Average_constant_prices))
+
+report(Onion_ExponentialSmoothing)
+
+OnionMNM <- Onion_constant_prices %>% model(ses = ETS(Average_constant_prices ~ error("M") + trend("N") + season("M")))
+
+OnionMNM %>% gg_tsresiduals()
+
+OnionMNM %>% 
+  tidy()
+
+Onion_ExponentialSmoothing %>% glance()
+```
+
+# Arima
+Our data is already stationary so we do not need to do any difference!
+Looking at our the ACF and PACF we see that we have two significant lags in the PACF (lag 1 and 2) indicating that an AR model of order 2 could be suitable. In the ACF we have also the first two lags as significant, but we also have two more ''barely'' significant lags, hence we choose to try the AR2 model which in this context makes the most sense, because of it's simplicity.
+
+We also included the auto-model to find the best fit, which was the better choice, but not too much better than the model we choice. But it has a slightly lower (almost insignificantly lower) BIC, AIC and AICc. The auto model suggest that we should have a seasonal component (12 months/yearly) and a SAR model as Arima(2,0,0)(0,0,2)[12]
+
+Both of these models have residuals that resemble white noise and hence, we have finally found a good forecasting model for the onion!
+
+```{r}
+Onion_constant_prices %>% gg_tsdisplay((Average_constant_prices), plot_type = "partial")
+
+Onion_fit <- Onion_constant_prices %>% 
+  model(Arima2 = ARIMA(Average_constant_prices ~ pdq(2,0,0)),
+    auto = ARIMA(Average_constant_prices, stepwise = FALSE, approx = FALSE))
+
+glance(Onion_fit) %>% 
+         arrange(AICc) %>% 
+         select(.model:BIC)
+
+Onion_fit %>% 
+  select(Arima2) %>% 
+  gg_tsresiduals()
+
+Onion_fit %>% 
+  select(auto) %>% 
+  gg_tsresiduals()
+
+```
