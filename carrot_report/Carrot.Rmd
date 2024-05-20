@@ -39,11 +39,11 @@ Generate tsibble:
 
 ```{r}
 # Loading Datasets.
-veggies <- read_csv("C:/Users/chenj/Desktop/FM Groupwork/kalimati_tarkari_dataset.csv", 
+veggies <- read_csv("../data_sources/kalimati_tarkari_dataset.csv", 
                     col_types = cols(Date = col_date(format = "%Y-%m-%d")))
 
 suppressWarnings({
-  cpi <- read_excel("C:/Users/chenj/Desktop/FM Groupwork/Nepal CPI Trading Economics.xlsx", 
+  cpi <- read_excel("../data_sources/Nepal CPI Trading Economics.xlsx", 
                     col_types = c("date", "numeric"))
 })
 
