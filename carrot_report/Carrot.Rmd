@@ -1,0 +1,557 @@
+---
+title: "Vegetables Prices Analysis in Kathmandu Valley: Carrot"
+author: "Emma Casalini, Student Code: 60382, Chenjie Chen, Student Code: 53505, Daniel Enriquez, Student Code: 60369"
+date: "2024-04-20"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(fpp3)
+library(gridExtra)
+library(readxl)
+library(lmtest)
+```
+
+## Vegetables Prices Analysis in Kathmandu Valley
+
+## 1. Introduction
+
+Forecasting prices of staple foods such as cabbage and potatoes is important because of its direct impact on a country's economy and society. Nepal, in this case, is a country with a large agricultural sector that contributes to a large part of the country's GDP. The price of staple foods affects not only farmers' incomes, but also the economy of the country. 
+These Nepalese staple food prices are also important to forecast as they indicate consumer purchasing power and the general rate of inflation in the country. By predicting these prices one can promote informed decisions, reduce risks and promote economic stability. Forecasting prices for staple foods is and will always be important.
+
+Main goal: accurately forecast the prices of key vegetables in Nepal over a specific time horizon.
+
+Dataset:
+The data set consists of vegetables in Nepal, where each vegetable represents a time series. The data is of a daily-nature, but it has been transformed into monthly data for the sake of this analysis and forecasting project. 
+
+# 1.1 Data Preparation
+
+Loading the fruits and vegetables prices in Nepal, and the Consumer Price Index (CPI) for Nepal.
+The first dataset integrates the daily average price to month level by computing the average of the average daily prices in a particular month.
+
+Generate tsibble:
+
+```{r}
+# Loading Datasets.
+veggies <- read_csv("../data_sources/kalimati_tarkari_dataset.csv", 
+                    col_types = cols(Date = col_date(format = "%Y-%m-%d")))
+
+suppressWarnings({
+  cpi <- read_excel("../data_sources/Nepal CPI Trading Economics.xlsx", 
+                    col_types = c("date", "numeric"))
+})
+
+cpi <- cpi |>
+  filter(Date >= '2013-08-01 00:00:00')
+
+# tidy up cpi
+base_index <- cpi$CPI[1]
+cpi <- cpi |>
+  mutate(Date = yearmonth(cpi$Date),
+         CPI = CPI/base_index) |>
+  select(c(Date, CPI))
+
+suppressMessages({
+  veggies <- veggies %>%
+    filter(Unit == "Kg") %>%
+    filter(Commodity %in% c("Tomato Big(Nepali)", "Potato Red",
+                            "Onion Dry (Indian)", "Carrot(Local)",
+                            "Cabbage(Local)")) %>%
+    mutate(Date = yearmonth(Date)) %>%
+    select(Commodity, Date, Average) %>%
+    group_by(Date, Commodity) %>%
+    summarize(Average = mean(Average)) %>%
+    ungroup()
+})
+
+veggies_ts <- veggies |>
+  as_tsibble(key = Commodity,
+             index = Date)
+
+head(veggies_ts, 5)
+```
+
+# 2. Time Series Graphics
+
+## 2.1 Average price of various vegetables in Nepal
+
+This plot shows the average monthly price of 5 vegetables in Nepal in Nepalese Rupees.
+
+```{r}
+veggies_ts |>
+  autoplot(Average) +
+  labs(y="Nepalese Rupees",
+       title="Average price per month of various vegetables in Nepal") +
+  theme_bw()
+```
+
+## 2.2 Average price of Local Carrot in Nepal
+
+This plot shows the average monthly price of Carrot(Local) in Nepal.This picture shows that local carrots bottom out around the beginning of each year, indicating that there is relatively strong seasonality.
+This is possible because the price of agricultural products will change due to different harvest times and different demand.
+As can be seen from the graph, there is a spike in two years, then a new spike one year later, followed by another spike at the end of two years, indicating a possible cyclicality.
+The annual price fluctuation range also changes, and the price fluctuations have become greater since 2016.
+The overall trend shows an initial upward trend and then a slight downward trend.
+
+```{r}
+Carrot <- veggies_ts %>% 
+  filter(Commodity == "Carrot(Local)")
+
+Carrot %>% 
+  autoplot(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Carrot(Local) in Nepal") +
+  theme_bw()
+```
+
+This plot shows the average price of local carrot in Nepal per month.
+Looking at the plot we can see that in September we have the highest price on average.Prices will then start to slowly fall in October, with a drop in December and continue into February and March.
+
+```{r}
+Carrot %>% 
+  gg_subseries(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Carrot(Local) in Nepal") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+## 2.3 Autocorrelation of Local Carrot
+
+Then it is the ACF plot. It indicates that we have both seasonal and cyclic behavior in the Local Carrot data, since it keeps changing between positive and negative significant lags.
+The lags beyond the dotted blue lines (significance bounds) indicates the autocorrelations around lag 6, 12, 18, 24, 30 and 36 are statistically significant.
+The plot shows strong positive autocorrelations around lag 12,24 and 36, which suggests there is an obvious yearly seasonal pattern of price, meaning that the prices are similar from previous year at the same time.
+This is normal situation for seasonal agricultural products.
+However, the negative significant autocorrelation around lags 6, 18 and 30 (around half year) shows an opposite trend.
+This means due to adjusments in demand and supply, the prices in these periods have a tendency to move in the opposite direction.
+
+```{r}
+Carrot %>% 
+  ACF(Average, lag_max = 36) %>%  
+  autoplot() +
+  labs(title="Autocorrelation of Carrot(Local)") +
+  theme_bw()
+```
+
+# 3. Time series decomposition
+
+## 3.1 Introduce CPI data
+
+We all know that, as the economy develops, the current price would be influenced by the effects of inflation.
+So for better analysis the prices across time, we need to do an adjustment.
+The adjustment is to import CPI of Nepal from dataset: Nepal CPI Trading Economics.
+We also introduce a new variable "Average_constant_price" which is obtained by dividing average price of Local carrot by CPI.
+
+```{r}
+Carrot_constant_prices <- Carrot %>% 
+  inner_join(cpi, by = join_by(Date)) %>% 
+  mutate(Average_constant_prices = Average / CPI) %>% 
+  select(Date, Commodity, Average_constant_prices)
+head(Carrot_constant_prices, 5)
+```
+
+Then we create two plots to compare the average price and average constant price (base 2013).We can see from the plot that after introducing CPI , the difference between spikes and troughs are decreased.
+
+```{r}
+Carrot_constant_prices %>% 
+  autoplot(Average_constant_prices) +
+  labs(y="Nepalese Rupees",
+       title="Carrot(Local) (2013 prices)") +
+  theme_bw()
+
+Carrot %>% 
+  autoplot(Average) +
+  labs(y="Nepalese Rupee",
+       title="Average Price of Carrot(Local)") +
+  theme_bw()
+```
+
+## 3.2 Box Cox transformation
+
+First we calculate the lambda parameter using the Guerrero method.
+The parameter is for the Box-Cox transformation to stabilize variance.
+
+```{r}
+lambda_constant_prices <- Carrot_constant_prices %>% 
+  features(Average_constant_prices, features = guerrero) %>% 
+  pull(lambda_guerrero) -> lambda
+```
+
+Then we create two plots: Average constant price of Local Carrot in Nepal both in constant 2013 prices without transformation and with Box Cox transformation.
+In the two plots we can find the difference with the transformation.
+The second plot with Box Cox transformation shows more smooth spikes and troughs since the transformation effectively stabilizes the variance.
+Besides, it still shows clear seasonal pattern after transformation.
+
+```{r}
+g1 <- Carrot_constant_prices %>% 
+  autoplot(Average_constant_prices) + 
+  labs(y="Constant Prices",
+       title="Average Price of Carrot(Local) (2013 prices)") +
+  theme_bw()
+
+g2 <- Carrot_constant_prices %>%
+  autoplot(box_cox(Average_constant_prices, lambda)) + 
+  labs(y="Box Cox",
+       title="Box Cox Transformation of Carrot(Local) (2013 prices)") +
+  theme_bw()
+
+grid.arrange(g1, g2, ncol = 1)
+```
+
+## 3.3 STL decomposition
+
+This plot shows the STL decomposition of the box cox transformation of the average price of Local Carrot in Nepal, the STL decomposition uses the 12 month window for seasonal pattern.
+We can see in the trend plot.
+It was very stable until 2020, then it has a obvious increase.
+Then in the season year plot, every year follows exactly the same pattern that has a fluctuation around August to october then the price decreases until the begining of next year and increase again.
+
+```{r}
+STL_dcmp <- Carrot_constant_prices %>% 
+  model(stl = STL(box_cox(Average_constant_prices, lambda_constant_prices) ~ season(window=12), robust=TRUE))
+
+components(STL_dcmp) %>% autoplot()
+
+```
+
+## 3.4 X-13 ARIMA
+
+This plot shows the X-13 ARIMA decomposition, the main difference is the trend component and the residuals, the Arima model is able to handle various complexities in seasonal patterns, using the ARIMA modeling for the time series data and the SEATS for seasonal adjustment.
+Compared with STL decomposition, they are mainly different in trend and residual plots.
+Regarding trend, in ARIMA model it is almost a straight line until the beginning of 2020, for the residual, STL has a smaller scale of fluctuation around 0, meaning more stable and good model fitting, while there is more fluctuation in ARIMA model.
+
+```{r}
+x_13_dcmp <- Carrot_constant_prices  %>% 
+  model(X_13ARIMA_SEATS(box_cox(Average_constant_prices, lambda_constant_prices)))
+
+components(x_13_dcmp) %>% 
+  autoplot()
+
+```
+
+# 4. The forecaster’s toolbox
+
+## 4.1 Create forecasting models
+
+Now we come to the forecasting part.
+We create four models: the Seasonal Naive, Naive, Drift and Mean.
+In the Naive model, it predicts the next value will be the same as the last observed one.
+Based on this, the Seasonal Naive model assumes that the next forecast value will be the same as the last observed value from the same season in last cycle.
+Drift model is a random walk, last value plus the average change.
+At last, for the mean model, it predicts future values using the mean of the data from the past.
+
+```{r}
+models <- Carrot_constant_prices %>% 
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices))
+    
+```
+
+## 4.2 Result from different models
+
+In the following plot we create a forecast for the average price of Local Carrot of 12 month using the models we previously introduced.
+Different from the naive model, the drift model predicts that the prices would slightly decrease.
+The seasonal naive model suggests that the price will replicate the previous trend which decreases at the beginning of the year and then increases.
+But we cannot assure that the price trend will be the same as the previous cycle or whether it will has a downward trend.
+
+```{r}
+models %>% 
+  forecast(h = 12) %>% 
+  autoplot(Carrot_constant_prices, level = NULL) +
+  ylab("Nepalese Rupees") +
+  ggtitle("12 Months forecast of Average Carrot(Local) Price (2013 prices)") +
+  guides(colour = guide_legend(title = "Forecast models")) +
+  theme_bw()
+```
+
+## 4.3 Compare actual and fitted values
+
+Then we compute the residuals and fitted values with augment() in order to create plots comparing actual and fitted values
+
+```{r}
+fit_SNAIVE <- Carrot_constant_prices %>% filter(!is.na(Average_constant_prices)) %>% 
+model(SNAIVE(Average_constant_prices))
+fit_SNAIVE %>% augment() 
+
+fit_NAIVE <- Carrot_constant_prices %>% filter(!is.na(Average_constant_prices)) %>% 
+model(NAIVE(Average_constant_prices))
+fit_NAIVE %>% augment() 
+
+fit_RW <- Carrot_constant_prices %>% filter(!is.na(Average_constant_prices)) %>% 
+model(RW(Average_constant_prices))
+fit_RW %>% augment() 
+
+fit_MEAN <- Carrot_constant_prices %>% filter(!is.na(Average_constant_prices)) %>% 
+model(MEAN(Average_constant_prices))
+fit_MEAN %>% augment() 
+```
+
+These plots show the comparison between the actual data and fitted models.
+Among all four models, mean model has the worst performance which it does not reflect any fluctuations and seasonal pattern.
+The seasonal naive model seems better fitted than mean, however, due to the change from 2017 onwards, it has big gap between actual data and predicted one.
+Then, although the naive and drift models fit the data well but with slight lateness.
+
+```{r}
+augment(fit_SNAIVE) %>%
+ggplot(aes(x = Date)) +
+geom_line(aes(y = Average_constant_prices, colour = "Data")) +
+ggtitle("Data and Seasonal Naive model fitted") +
+ylab("Nepalese Rupees") +
+geom_line(aes(y = .fitted, colour = "Fitted"))
+
+augment(fit_NAIVE) %>%
+ggplot(aes(x = Date)) +
+geom_line(aes(y = Average_constant_prices, colour = "Data")) +
+ggtitle("Data and Naive model fitted") +
+ylab("Nepalese Rupees") +
+geom_line(aes(y = .fitted, colour = "Fitted"))
+
+augment(fit_RW) %>%
+ggplot(aes(x = Date)) +
+geom_line(aes(y = Average_constant_prices, colour = "Data")) +
+ggtitle("Data and Drift model fitted") +
+ylab("Nepalese Rupees") +
+geom_line(aes(y = .fitted, colour = "Fitted"))
+
+augment(fit_MEAN) %>%
+ggplot(aes(x = Date)) +
+geom_line(aes(y = Average_constant_prices, colour = "Data")) +
+ggtitle("Data and Mean model fitted") +
+ylab("Nepalese Rupees") +
+geom_line(aes(y = .fitted, colour = "Fitted"))
+```
+
+The following plots are the residuals of the models.For the mean model, residuals show a cyclic pattern, which means no seasonal variations are captured and it can be proved by the significant autocorrelation in the acf plot.
+The drift and naive models shows less fluctuations in residuals, means it captures some trend in the data.
+And the histogram shows the residuals are more centered around 0, meaning the drift model fits better than mean.
+Then the seasonal naive model has smaller volatility in residuals than drift as well as lower autocorrelation, suggesting a better fit.
+All four models do not perform very well, but the seasonal naive performs relatively better.
+
+```{r}
+models %>%
+  select(Commodity, Mean) %>%
+  gg_tsresiduals()+
+  ggtitle("Residuals of Mean model")
+
+models %>% 
+  select(Commodity, Seasonal_naive) %>% 
+  gg_tsresiduals()+
+  ggtitle("Residuals of Seasonal_naive model")
+
+models %>%
+  select(Commodity, Drift) %>%
+  gg_tsresiduals()+
+  ggtitle("Residuals of Drift model")
+
+models %>%
+  select(Commodity, Naive) %>%
+  gg_tsresiduals()+
+  ggtitle("Residuals of Naive model")
+
+```
+
+## 4.4 Accuracy of the models
+
+Then we take the rolling window method, which stretches an initial window size of 24 months, increasing by 1 month at each step.
+We create two tables which the first table shows the accuracy of the model when forecasting 12 periods and the second table forecasts only 1 period.
+The results in the tables draw the same conclusion that we concluded above.
+The drift and naive models have similar and better results in short period.
+On the other hand, when forecasting longer periods such as 12 months, the seasonal naive model seems to be the best choice.
+
+```{r}
+
+Carrot_fit <- Carrot_constant_prices %>%
+  stretch_tsibble(.init = 24, .step = 1) %>% 
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices))
+
+Carrot_fc <- Carrot_fit %>%
+forecast(h = 12)
+
+Carrot_fc %>%
+  accuracy(Carrot_constant_prices) %>%
+  select(.model,.type, RMSE, MAE, MAPE, MASE,RMSSE)
+
+fc_cv <- Carrot_fit %>%
+  forecast(h = 1)
+
+fc_cv %>%
+  accuracy(Carrot_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)
+
+```
+
+# 5. Exponential smoothing
+
+## 5.1 Model choosing
+
+We know that our dataset shows high seasonal changes, but we cannot tell the general trend.
+So we would like to choose an ETS model excluding trend but including seasonality.
+Let's first try the ETS(A,N,A) model.
+
+```{r}
+Carrot_ETS_fit <- Carrot_constant_prices %>% 
+  model(Carrot_ETS = ETS(Average_constant_prices ~ error("A") + trend("N") + season("A")))
+
+Carrot_ETS_fit %>% tidy()
+```
+
+## 5.2 Evaluation of the model
+
+The model shows an obvious and seasonal pattern, which the prices increasing at the beginning of the year and decreases at the end of the year.
+And the plot of residuals seems to indicates white noise.
+At the same time, from the acf we can see there's no significant auto correlation and residuals are normally distributed with 0 mean.
+
+```{r}
+Carrot_ETS_fit %>% 
+  components() %>% 
+  autoplot()
+
+Carrot_ETS_fit %>% 
+  gg_tsresiduals()
+```
+
+## 5.3 Evaluation of the automatic model by fpp3
+
+The automatic model is very similar to the one we tried above, but with multiplicative method.The seasonal patter n seems to be the same.The analysis on residuals shows that it has similar level of autocorrelation.
+But the distribution of errors is not as good as the previous one.
+
+```{r}
+fit_ETS <- Carrot_constant_prices %>% 
+  model(ets = ETS())
+
+fit_ETS %>% tidy()
+fit_ETS %>% components() %>% autoplot()
+fit_ETS %>% gg_tsresiduals()
+
+```
+
+Then we apply the Ljung-Box test to see if there is autocorrelation.
+And we get the p-value of 0.916 which is higher than 0.05(significance level), so we do not reject null hypothesis.
+This means there is no significant proof of autocorrelation in residuals.
+
+```{r}
+augment(fit_ETS) %>%
+  features(.resid, ljung_box, lag=20, dof=0)
+```
+
+# 6. Arima
+
+In this part, we generate automatic ARIMA model: ARIMA(1,0,0)(2,1,0)[12] 
+First it is the non-seasonal component. AR(1) means the model has one autoregressive term. I(0) means the degree of differencing. And zero means the data is already stationary. MA(0) means there is no moving average component.
+Then it is the seasonal component. AR(2) means there are two seasonal autoregressive terms meaning the current value is affected by the values from the same season in previous years. I(1) means it has been differenced once to achieve stationary. MA(0) means there is no moving average terms. At last, s has a value of 12 means the length of the seasonal period. In our case, it corresponds to a monthly data.
+
+```{r}
+fit_arima <- Carrot_constant_prices %>% 
+  model(arima = ARIMA()) %>% 
+  report()
+
+```
+
+Then we analyze the residuals, the plots indicate that the residuals of the ARIMA model tends to be white noise, because there is no strong evidence of autocorrelation (also proved by the following Ljung_Box test which gives a p-value of 0.333 > 0.05) and the distribution tends to be normally distributed around 0 mean.
+
+```{r}
+fit_arima %>% 
+  select(arima) %>% 
+  gg_tsresiduals()
+
+augment(fit_arima) %>%
+features(.resid, ljung_box, lag = 10, dof = 3)
+
+```
+
+Finally, we measure the accuracy of the models again.
+We create two tables which corresponding to long and short period to compare the ARIMA model with the previous models: Seasonal Naive, Naive, Drift, Mean and ETS.
+As we expected, four simple models does not perform as good as ETS and Arima, except the seasonal naive model has a similar performance as Arima in forecasting long period.
+When evaluating the accuracy of forecasting short period, Arima and ETS have very close results and ETS performs slightly better than Arima.
+Regarding the long period, Arima has a better global performance.
+Therefore, we can draw the conclusion that Arima model is the best to forecast the price of Local Carrot in Nepal.
+
+```{r}
+Carrot_fit <- Carrot_constant_prices %>%
+  stretch_tsibble(.init = 24, .step = 1) %>% 
+  model(
+    Seasonal_naive = SNAIVE(Average_constant_prices),
+    Naive = NAIVE(Average_constant_prices),
+    Drift = RW(Average_constant_prices ~ drift()),
+    Mean = MEAN(Average_constant_prices),
+    ETS = ETS(),
+    Arima = ARIMA())
+
+Carrot_fc <- Carrot_fit %>%
+forecast(h = 12)
+
+Carrot_fc %>%
+  accuracy(Carrot_constant_prices) %>%
+  select(.model,.type, RMSE, MAE, MAPE, MASE,RMSSE)
+
+fc_cv <- Carrot_fit %>%
+  forecast(h = 1)
+
+fc_cv %>%
+  accuracy(Carrot_constant_prices) %>%
+  select(.model, .type, RMSE, MAE, MAPE, MASE, RMSSE)
+
+```
+
+# 7. Other forecasting method
+
+For other forecasting method, we use prophet forecasting procedure which is fast and provides completely automated forecasts that can be tuned by hand by data analysts.
+
+First, we would import prophet:
+```{r}
+library(prophet)
+```
+
+Then we need a dataframe with columns ds and y, containing the date and numeric value respectively.
+
+```{r}
+df <- Carrot_constant_prices  %>%  
+  as_tibble() %>% 
+  mutate(ds = Date, y = Average_constant_prices) %>% 
+  select(ds, y)
+```
+
+Then we call the prophet function to calculate forecast.
+
+```{r}
+m <- prophet(df, seasonality.mode = 'multiplicative')
+
+```
+
+Predictions are made on a dataframe with a column ds containing the dates for which predictions are to be made. The make_future_dataframe function takes the model object and a number of periods to forecast and produces a suitable dataframe.
+
+```{r}
+future <- make_future_dataframe(m, periods = 365)
+tail(future)
+```
+
+Then we use the generic predict function to get our forecast. The forecast object is a dataframe with a column yhat containing the forecast. It has additional columns for uncertainty intervals and seasonal components.
+
+```{r}
+forecast <- predict(m, future)
+tail(forecast[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+```
+
+Next, we plot the fitted values compared with actual ones and forecasting of 1 year. From the plot we can see that the model fits pretty well except the peaks in 2016 and 2018. But the forecast seems not good, it does not follow the trend and pattern of the data which the price starts to increase at the beginning of the year and decreases at the end of the year.
+
+```{r}
+plot(m, forecast)
+```
+
+Then we use the prophet_plot_components function to see the forecast broken down into trend, weekly seasonality, and yearly seasonality. The trend seems to continuously decrease from 2014 onwards. And yearly seasonal component seems it does not follow the seasonal trend that is already known and not reasonable.
+
+```{r}
+prophet_plot_components(m, forecast)
+```
