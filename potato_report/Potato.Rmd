@@ -1,8 +1,8 @@
 ---
-title: "Vegetables Prices Analysis"
-author: "Daniel Enriquez, Student Code: 60369,
-         Emma Casalini, Student Code: 60382,
-         Chenjie Chen, Student Code: 53505"
+title: "Vegetables Prices Analysis in Kathmandu Valley: Potato Red"
+author: "Emma Casalini, Student Code: 60382,
+         Chenjie Chen, Student Code: 53505,
+         Daniel Enriquez, Student Code: 60369"
 date: "2024-04-20"
 output: 
   html_document:
@@ -10,7 +10,6 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_knit$set(root.dir = '/Users/danielenriquez/iseg/forecasting_from_hell/')
 knitr::opts_chunk$set(echo = TRUE)
 options(warn = -1, messages = FALSE)
 library(readr)
@@ -21,11 +20,17 @@ library(readxl)
 library(prophet) # will be used in the last section of this markdown.
 ```
 
-## Vegetables Prices Analysis in Kathmandu Valley
+## Potato Red Price Forecast
 
 ## 1. Introduction
 
-bla bla bla
+Forecasting prices of staple foods such as cabbage and potatoes is important because of its direct impact on a country's economy and society. Nepal, in this case, is a country with a large agricultural sector that contributes to a large part of the country's GDP. The price of staple foods affects not only farmers' incomes, but also the economy of the country. 
+These Nepalese staple food prices are also important to forecast as they indicate consumer purchasing power and the general rate of inflation in the country. By predicting these prices one can promote informed decisions, reduce risks and promote economic stability. Forecasting prices for staple foods is and will always be important.
+
+Main goal: accurately forecast the prices of key vegetables in Nepal over a specific time horizon.
+
+Dataset:
+The data set consists of vegetables in Nepal, where each vegetable represents a time series. The data is of a daily-nature, but it has been transformed into monthly data for the sake of this analysis and forecasting project. 
 
 ## 1.1 Data Preparation
 
@@ -36,11 +41,11 @@ The generated tsibble looks like this.
 
 ```{r}
 # Loading Datasets.
-veggies <- read_csv("data_sources/kalimati_tarkari_dataset.csv", 
+veggies <- read_csv("../data_sources/kalimati_tarkari_dataset.csv", 
                     col_types = cols(Date = col_date(format = "%Y-%m-%d")))
 
 suppressWarnings({
-  cpi <- read_excel("data_sources/Nepal CPI Trading Economics.xlsx", 
+  cpi <- read_excel("../data_sources/Nepal CPI Trading Economics.xlsx", 
                     col_types = c("date", "numeric"))
 })
 

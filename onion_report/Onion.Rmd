@@ -1,9 +1,41 @@
 ---
-title: "Onion"
-author: "Emma"
+title: "Vegetables Prices Analysis in Kathmandu Valley: Onion"
+author: "Emma Casalini, Student Code: 60382,
+         Chenjie Chen, Student Code: 53505,
+         Daniel Enriquez, Student Code: 60369"
 date: "2024-05-05"
-output: html_document
+output: 
+  html_document:
+    code_folding: hide
 ---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(warn = -1, messages = FALSE)
+library(readr)
+library(tidyverse)
+library(fpp3)
+library(gridExtra)
+library(readxl)
+library(lmtest)
+```
+
+## Onion Price Forecast
+
+## 1. Introduction
+Forecasting prices of staple foods such as cabbage and potatoes is important because of its direct impact on a country's economy and society. Nepal, in this case, is a country with a large agricultural sector that contributes to a large part of the country's GDP. The price of staple foods affects not only farmers' incomes, but also the economy of the country. 
+These Nepalese staple food prices are also important to forecast as they indicate consumer purchasing power and the general rate of inflation in the country. By predicting these prices one can promote informed decisions, reduce risks and promote economic stability. Forecasting prices for staple foods is and will always be important.
+
+Main goal: accurately forecast the prices of key vegetables in Nepal over a specific time horizon.
+
+Dataset:
+The data set consists of vegetables in Nepal, where each vegetable represents a time series. The data is of a daily-nature, but it has been transformed into monthly data for the sake of this analysis and forecasting project. 
+
+
+## 1.1 Data Preparation
+
+Loading the data sets: fruits and vegetables prices in Nepal, as well as the Consumer Price Index (CPI) for Nepal. The fruits and vegetables table contains the average price for vegetables and fruits on a given day. For the time series analysis this will be aggregated to the month level by taking the average of the average daily prices in a particular month.
+
+The generated tsibble looks like this.
 
 ```{r}
 # Loading Datasets.
